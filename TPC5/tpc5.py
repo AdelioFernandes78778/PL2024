@@ -2,6 +2,7 @@ import json
 import ply.lex as lex
 from datetime import datetime
 import re
+from decimal import Decimal, ROUND_HALF_UP
 
 
 tokens = (
@@ -30,10 +31,9 @@ t_VALOR_MOEDA = r'(1|2|5|10|20|50)e|(1|2|5)c'
 
 t_ignore = ' \n'
 
-
 # Função para processar o token MOEDA
 def t_MOEDA(t):
-    r'MOEDA\s+((2|5|10|20|50)c|(1|2)e)(?:\s*,\s*((2|5|10|20|50)c|(1|2)e))*'
+    r'MOEDA\s+((2|5|10|20|50)c|(1|2)e)(\s*,\s*((2|5|10|20|50)c|(1|2)e))*\.?'
 
     # Inicializar saldo
     saldo = 0
@@ -45,11 +45,11 @@ def t_MOEDA(t):
         else:
             saldo += int(moeda.group("euro")) * 100
 
-    # Exibir saldo
+    # Exibir saldo apenas uma vez após processar todas as moedas
     printable_euro, printable_cent = divmod(saldo, 100)
     print(f"maq: Saldo = {printable_euro}e{printable_cent}c")
     
-    # Retorna o saldo calculado
+    # Retorna o saldo como um token
     t.value = saldo
     return t
 
@@ -59,25 +59,38 @@ def t_error(t):
 
 lexer = lex.lex()
 
-# Função para processar o comando de selecionar produto
+
 def selecionar_produto(codigo, saldo, stock):
     for produto in stock:
         if produto['cod'] == codigo:
-            if produto['quant'] > 0 and produto['preco'] <= saldo:
+            preco_produto = Decimal(produto['preco']) * 100  # Convertendo o preço para centimos
+            if produto['quant'] > 0 and preco_produto <= saldo:
                 produto['quant'] -= 1
-                saldo -= produto['preco']
+                saldo -= preco_produto
+                saldo = saldo.quantize(Decimal('1.00'), rounding=ROUND_HALF_UP)
                 print(f"Pode retirar o produto dispensado \"{produto['nome']}\"")
-                print(f"Saldo = {saldo // 100}e{saldo % 100}c")
+                saldo_euro, saldo_cent = divmod(saldo, 100)
+                if saldo_cent == 0:
+                    print(f"Saldo = {saldo_euro}e{saldo_cent//10}c")
+                else:
+                    print(f"Saldo = {saldo_euro}e{saldo_cent}c")
             elif produto['quant'] == 0:
                 print("Produto esgotado.")
             else:
-                print(f"Saldo insuficiente para satisfazer o seu pedido")
-                print(f"Saldo = {saldo // 100}e{saldo % 100}c; Pedido = {produto['preco'] // 100}e{produto['preco'] % 100}c")
+                print("Saldo insuficiente para satisfazer o seu pedido")
+                saldo_euro, saldo_cent = divmod(saldo, 100)
+                if saldo_cent == 0:
+                    print(f"Saldo = {saldo_euro}e{saldo_cent//10}c")
+                else:
+                    print(f"Saldo = {saldo_euro}e{saldo_cent}c")
+                preco_euro, preco_cent = divmod(preco_produto, 100)
+                print(f"Pedido = {preco_euro}e{preco_cent}c")
             return saldo
     print("Produto inexistente.")
     return saldo
 
-# Função para adicionar produto ao estoque
+
+# Função para adicionar produto ao stock
 def adicionar_produto(codigo, nome, quantidade, preco, stock):
     for produto in stock:
         if produto['cod'] == codigo:
@@ -94,7 +107,7 @@ def main():
     with open('TPC5/stock.json', 'r', encoding='utf-8') as file:
         data = json.load(file)
 
-    # Obter o estoque do arquivo JSON
+    # Obter o stock do arquivo JSON
     stock = data["stock"]
 
     print("maq: 2024-03-08, Stock carregado, Estado atualizado.")
@@ -122,17 +135,19 @@ def main():
                 codigo = input("Código do produto: ")
                 nome = input("Nome do produto: ")
                 quantidade = int(input("Quantidade: "))
-                preco = input("Preço (em centavos): ")
+                preco = input("Preço (em centimos): ")
                 adicionar_produto(codigo, nome, quantidade, preco, stock)
             elif tok.type == 'SAIR':
                 print("Saindo...")
                 return
             elif tok.type == 'MOEDA':
-                moeda_completo = comando.split()[1]  # Obtém a parte após o comando MOEDA
-                moedas = re.findall(r'\d+', moeda_completo)  # Extrai valores numéricos
-                saldo += sum(int(m) for m in moedas)  # Adiciona ao saldo total
-                print(f"maq: Saldo = {saldo // 100}e{saldo % 100}c")
-                break  # Interrompe o loop após processar o token MOEDA
+                saldo += tok.value
+                try:
+                    next_tok = next(lexer)
+                    if next_tok.type != 'SAIR':
+                        print(f"Comando inválido: {next_tok.value}")
+                except StopIteration:
+                    pass  # Não há mais tokens, nada a fazer
             else:
                 print(f"Comando inválido: {tok.value}")
 
